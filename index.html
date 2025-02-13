@@ -24,7 +24,7 @@
     </div>
 
     <script>
-        const API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
+        const API_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions";
 
         async function auditText() {
             const apiKey = document.getElementById('apiKey').value;
@@ -58,7 +58,7 @@
                     'Authorization': `Bearer ${apiKey}`
                 },
                 body: JSON.stringify({
-                    "model": "qwen-max-0125",
+                    "model": "qwen-max-2025-01-25",
                     "input": {
                         "messages": [
                             {
