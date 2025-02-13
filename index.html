@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>文本内容双审工具</title>
+    <style>
+        /* 原有样式保持不变 */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>文本内容审核系统</h2>
+        <div class="usage">今日已用：<span id="tokenCounter">0</span>/6000 tokens</div>
+        <textarea id="inputText" placeholder="请输入待审核文本..."></textarea>
+        <button onclick="startVerification()">开始审核</button>
+        
+        <div id="grammarResult" class="result"></div>
+        <div id="aigcResult" class="result"></div>
+    </div>
+
+    <script>
+        const API_KEY = "YOUR_API_KEY";
+        const API_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation";
+        const MAX_DAILY_TOKENS = 6000;
+
+        // 用量统计初始化
+        function initUsage() {
+            const today = new Date().toISOString().split('T')[0];
+            const stored = localStorage.getItem('dailyUsage');
+            if (!stored || JSON.parse(stored).date !== today) {
+                localStorage.setItem('dailyUsage', JSON.stringify({
+                    date: today,
+                    tokens: 0
+                }));
+            }
+            updateTokenDisplay();
+        }
+
+        // 更新用量显示
+        function updateTokenDisplay() {
+            const usage = JSON.parse(localStorage.getItem('dailyUsage'));
+            document.getElementById('tokenCounter').textContent = usage.tokens;
+        }
+
+        // 增强版API调用
+        async function callQwenAPI(prompt) {
+            try {
+                const response = await fetch(API_URL, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        model: "qwen-max-0125",
+                        input: {
+                            messages: [
+                                {
+                                    role: "system",
+                                    content: "你是一个专业的内容审核助手，请严格按照用户要求执行文本分析，且必须返回纯净JSON格式"
+                                },
+                                {
+                                    role: "user",
+                                    content: prompt
+                                }
+                            ]
+                        }
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.message || `API错误: ${response.status}`);
+                
+                // 假设API返回包含usage数据
+                const tokensUsed = data.usage?.total_tokens || estimateTokens(data.output.text);
+                return { text: data.output.text, tokens: tokensUsed };
+            } catch (error) {
+                console.error("API调用错误:", error);
+                return { text: `服务异常: ${error.message}`, tokens: 0 };
+            }
+        }
+
+        // 简易token估算（按汉字=2 tokens，英文=1.3 tokens）
+        function estimateTokens(text) {
+            const chineseChars = text.match(/[\u4e00-\u9fa5]/g)?.length || 0;
+            const englishChars = text.length - chineseChars;
+            return Math.ceil(chineseChars*2 + englishChars*1.3);
+        }
+
+        // 智能JSON解析
+        function safeParseJSON(response) {
+            try {
+                // 清理响应内容
+                const cleanText = response
+                    .replace(/```json|```/g, '')
+                    .replace(/^[^{]*/, '') // 去除前缀
+                    .replace(/[^}]*$/, ''); // 去除后缀
+                return JSON.parse(cleanText);
+            } catch (e) {
+                console.warn("JSON解析失败:", response);
+                return null;
+            }
+        }
+
+        async function startVerification() {
+            // 检查当日额度
+            const usage = JSON.parse(localStorage.getItem('dailyUsage'));
+            if (usage.tokens >= MAX_DAILY_TOKENS) {
+                alert("今日额度已用尽，请明日再试");
+                return;
+            }
+
+            const text = document.getElementById("inputText").value.trim();
+            if (!text) return alert("请输入待审核文本");
+
+            // 执行双审
+            const [grammarResp, aigcResp] = await Promise.all([
+                callQwenAPI(generateGrammarPrompt(text)),
+                callQwenAPI(generateAIGCPrompt(text))
+            ]);
+
+            // 更新用量
+            const totalUsed = grammarResp.tokens + aigcResp.tokens;
+            if (usage.tokens + totalUsed > MAX_DAILY_TOKENS) {
+                alert(`超出限额，剩余可用tokens：${MAX_DAILY_TOKENS - usage.tokens}`);
+                return;
+            }
+            usage.tokens += totalUsed;
+            localStorage.setItem('dailyUsage', JSON.stringify(usage));
+            updateTokenDisplay();
+
+            // 显示结果
+            processResponse('grammarResult', grammarResp.text);
+            processResponse('aigcResult', aigcResp.text);
+        }
+
+        function generateGrammarPrompt(text) {
+            return `请严格检查以下文本的语法错误，返回纯净JSON：
+{
+    "has_errors": boolean,
+    "errors": [{...}],
+    "final_verdict": "AI文字审核通过/未通过"
+}
+文本：${text}`;
+        }
+
+        function generateAIGCPrompt(text) {
+            return `请分析以下文本是否为AI生成，返回纯净JSON：
+{
+    "ai_probability": 0.0-1.0,
+    "evidence": ["特征1", "特征2"],
+    "final_verdict": "AIGC审核通过/未通过"
+}
+文本：${text}`;
+        }
+
+        function processResponse(elementId, response) {
+            const container = document.getElementById(elementId);
+            const result = safeParseJSON(response);
+            
+            if (!result) {
+                container.textContent = "解析失败，请检查API响应格式";
+                container.className = "result warning";
+                return;
+            }
+
+            container.textContent = result.final_verdict || "无明确结论";
+            container.className = `result ${result.final_verdict?.includes("通过") ? "success" : "warning"}`;
+        }
+
+        // 初始化用量统计
+        initUsage();
+    </script>
+</body>
+</html>
